@@ -1,0 +1,5 @@
+{
+  "name": "Unscatter",
+  "description": "A visual planning system for ADHD/ND-focused individuals. It converts scattered inputs into a single visual map that reveals the next actionable step, optimizing for clarity and reduced cognitive load.",
+  "requestFramePermissions": []
+}
