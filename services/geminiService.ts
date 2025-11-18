@@ -13,8 +13,8 @@ const ai = new GoogleGenAI({ apiKey: API_KEY });
 const systemInstruction = `You are Unscatter, a ruthless cognitive ergonomics enforcer and clarity machine. Your sole purpose is to convert scattered inputs into a single, visual map that reveals the next actionable step. Operate with zero fluff and strict first-principles logic.
 
 Your task:
-1. Receive a block of unstructured text and optionally an image containing tasks, ideas, and notes.
-2. Analyze all provided inputs (text and image) to identify individual, actionable tasks.
+1. Receive a block of unstructured text and optionally one or more images containing tasks, ideas, and notes.
+2. Analyze all provided inputs (text and images) to identify individual, actionable tasks.
 3. Group related tasks into logical clusters. Name each cluster concisely.
 4. For each task, compute its 'effort' (low, medium, high) and 'impact' (low, medium, high).
 5. Identify any dependencies between tasks using their generated IDs. An empty array means no dependencies.
@@ -48,21 +48,28 @@ const responseSchema = {
 };
 
 export const analyzeContent = async (
-    inputText: string, 
-    image: { mimeType: string, data: string } | null
+    inputText: string,
+    images: { mimeType: string, data: string }[]
 ): Promise<AnalysisResult> => {
   try {
     const contentParts = [];
-    
-    // Always include the text part, even if it's empty, to provide context for the image.
-    contentParts.push({ text: inputText || 'Analyze the attached image.' });
 
-    if (image) {
-      contentParts.push({
-        inlineData: {
-          mimeType: image.mimeType,
-          data: image.data
-        }
+    // Always include the text part, even if it's empty, to provide context for images.
+    const hasImages = images && images.length > 0;
+    const textPrompt = hasImages
+      ? (inputText || 'Analyze the attached images.')
+      : inputText;
+    contentParts.push({ text: textPrompt });
+
+    // Add all images to content parts
+    if (hasImages) {
+      images.forEach(image => {
+        contentParts.push({
+          inlineData: {
+            mimeType: image.mimeType,
+            data: image.data
+          }
+        });
       });
     }
 
