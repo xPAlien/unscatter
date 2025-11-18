@@ -1,104 +1,114 @@
-
-import { GoogleGenAI, Type } from "@google/genai";
 import { AnalysisResult } from '../types';
+import { API } from '../utils/constants';
+import { RateLimiter } from '../utils/rateLimiter';
+import { AnalysisCache } from '../utils/cache';
+import { getSafeErrorMessage } from '../utils/sanitize';
+import { logger } from '../utils/logger';
 
-const API_KEY = process.env.API_KEY;
+// Initialize rate limiter and cache
+const rateLimiter = new RateLimiter(10, 60000); // 10 requests per minute
+const cache = new AnalysisCache();
 
-if (!API_KEY) {
-  throw new Error("API_KEY environment variable is not set.");
-}
-
-const ai = new GoogleGenAI({ apiKey: API_KEY });
-
-const systemInstruction = `You are Unscatter, a ruthless cognitive ergonomics enforcer and clarity machine. Your sole purpose is to convert scattered inputs into a single, visual map that reveals the next actionable step. Operate with zero fluff and strict first-principles logic.
-
-Your task:
-1. Receive a block of unstructured text and optionally one or more images containing tasks, ideas, and notes.
-2. Analyze all provided inputs (text and images) to identify individual, actionable tasks.
-3. Group related tasks into logical clusters. Name each cluster concisely.
-4. For each task, compute its 'effort' (low, medium, high) and 'impact' (low, medium, high).
-5. Identify any dependencies between tasks using their generated IDs. An empty array means no dependencies.
-6. Based on your analysis, determine the single most logical 'nextActionId'. This is the ID of the task with the lowest effort and highest impact that is not blocked by dependencies.
-7. Return the entire analysis as a JSON object adhering strictly to the provided schema. Do not output any other text, explanation, or markdown. Your response must be only the JSON.`;
-
-const responseSchema = {
-  type: Type.OBJECT,
-  properties: {
-    tasks: {
-      type: Type.ARRAY,
-      items: {
-        type: Type.OBJECT,
-        properties: {
-          id: { type: Type.INTEGER },
-          task: { type: Type.STRING },
-          cluster: { type: Type.STRING },
-          effort: { type: Type.STRING, enum: ['low', 'medium', 'high'] },
-          impact: { type: Type.STRING, enum: ['low', 'medium', 'high'] },
-          dependencies: {
-            type: Type.ARRAY,
-            items: { type: Type.INTEGER },
-          },
-        },
-        required: ['id', 'task', 'cluster', 'effort', 'impact', 'dependencies'],
-      },
-    },
-    nextActionId: { type: Type.INTEGER },
-  },
-  required: ['tasks', 'nextActionId'],
-};
-
+/**
+ * Analyze content using the backend API proxy
+ * This keeps the API key secure on the server side
+ */
 export const analyzeContent = async (
-    inputText: string,
-    images: { mimeType: string, data: string }[]
+  inputText: string,
+  images: { mimeType: string; data: string }[]
 ): Promise<AnalysisResult> => {
   try {
-    const contentParts = [];
-
-    // Always include the text part, even if it's empty, to provide context for images.
-    const hasImages = images && images.length > 0;
-    const textPrompt = hasImages
-      ? (inputText || 'Analyze the attached images.')
-      : inputText;
-    contentParts.push({ text: textPrompt });
-
-    // Add all images to content parts
-    if (hasImages) {
-      images.forEach(image => {
-        contentParts.push({
-          inlineData: {
-            mimeType: image.mimeType,
-            data: image.data
-          }
-        });
-      });
+    // Check rate limit
+    if (!rateLimiter.canMakeRequest()) {
+      const waitTime = rateLimiter.getWaitTimeMessage();
+      logger.warn('Rate limit exceeded', { waitTime });
+      throw new Error(`Rate limit exceeded. Please wait ${waitTime} before trying again.`);
     }
 
-    const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: { parts: contentParts },
-        config: {
-            systemInstruction: systemInstruction,
-            responseMimeType: 'application/json',
-            responseSchema: responseSchema,
-            temperature: 0.1,
-        }
+    // Check cache
+    const cached = cache.get(inputText, images);
+    if (cached) {
+      logger.info('Using cached result');
+      return cached;
+    }
+
+    logger.info('Making API request', {
+      textLength: inputText.length,
+      imageCount: images.length
     });
 
-    const jsonText = response.text.trim();
-    const result: AnalysisResult = JSON.parse(jsonText);
-    
-    // Validate the result structure
-    if (!result || !Array.isArray(result.tasks) || typeof result.nextActionId !== 'number') {
-        throw new Error("Invalid data structure received from API.");
+    // Call backend API
+    const response = await fetch(`${API.BASE_URL}${API.ENDPOINTS.ANALYZE}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        inputText,
+        images
+      }),
+      signal: AbortSignal.timeout(API.TIMEOUT)
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({ error: response.statusText }));
+      throw new Error(errorData.error || `Server error: ${response.status}`);
     }
+
+    const result: AnalysisResult = await response.json();
+
+    // Validate result structure
+    if (!result || !Array.isArray(result.tasks) || typeof result.nextActionId !== 'number') {
+      throw new Error('Invalid data structure received from API');
+    }
+
+    // Cache the result
+    cache.set(inputText, images, result);
+
+    logger.info('Analysis complete', {
+      taskCount: result.tasks.length,
+      nextActionId: result.nextActionId
+    });
 
     return result;
-
   } catch (error) {
-    console.error("Error analyzing content with Gemini API:", error);
-    if (error instanceof Error) {
-        throw new Error(`Failed to process request: ${error.message}`);
-    }
-    throw new Error("An unknown error occurred while analyzing the content.");
+    logger.error('Analysis failed', error as Error, {
+      textLength: inputText.length,
+      imageCount: images.length
+    });
+
+    // Return sanitized error message
+    const safeMessage = getSafeErrorMessage(error as Error);
+    throw new Error(safeMessage);
   }
 };
+
+/**
+ * Check if the API server is healthy
+ */
+export const checkHealth = async (): Promise<boolean> => {
+  try {
+    const response = await fetch(`${API.BASE_URL}${API.ENDPOINTS.HEALTH}`, {
+      method: 'GET',
+      signal: AbortSignal.timeout(5000)
+    });
+
+    return response.ok;
+  } catch (error) {
+    logger.error('Health check failed', error as Error);
+    return false;
+  }
+};
+
+/**
+ * Clear the analysis cache
+ */
+export const clearCache = (): void => {
+  cache.clear();
+  logger.info('Cache cleared');
+};
+
+/**
+ * Get cache statistics
+ */
+export const getCacheStats = () => cache.getStats();

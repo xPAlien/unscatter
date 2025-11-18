@@ -9,6 +9,9 @@ import { LoadingSpinner } from './components/LoadingSpinner';
 import { ErrorMessage } from './components/ErrorMessage';
 import { WelcomeMessage } from './components/WelcomeMessage';
 import { LandingPage } from './components/LandingPage';
+import { sanitizeUserInput } from './utils/sanitize';
+import { THEME, ERROR_MESSAGES } from './utils/constants';
+import { logger } from './utils/logger';
 
 export type Theme = 'light' | 'gray' | 'dark';
 export interface ImageFile {
@@ -24,9 +27,10 @@ const App: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [view, setView] = useState<'landing' | 'app'>('landing');
   const [theme, setTheme] = useState<Theme>(() => {
-    const savedTheme = localStorage.getItem('unscatter-theme');
-    return (savedTheme || 'light') as Theme;
+    const savedTheme = localStorage.getItem(THEME.STORAGE_KEY);
+    return (savedTheme || THEME.DEFAULT) as Theme;
   });
+  const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
 
   useEffect(() => {
     const root = window.document.documentElement;
@@ -35,7 +39,7 @@ const App: React.FC = () => {
     } else {
       root.classList.remove('dark');
     }
-    localStorage.setItem('unscatter-theme', theme);
+    localStorage.setItem(THEME.STORAGE_KEY, theme);
   }, [theme]);
 
   const handleThemeToggle = () => {
@@ -47,32 +51,60 @@ const App: React.FC = () => {
   };
 
   const handleSubmit = async () => {
-    if (!userInput.trim() && imageFiles.length === 0) {
-      setError("Input cannot be empty. Please provide text or images.");
+    // Prevent double submission
+    if (isSubmitting) {
+      logger.warn('Attempted double submission');
       return;
     }
+
+    if (!userInput.trim() && imageFiles.length === 0) {
+      setError(ERROR_MESSAGES.EMPTY_INPUT);
+      return;
+    }
+
+    setIsSubmitting(true);
     setIsLoading(true);
     setError(null);
     setAnalysisResult(null);
 
     try {
-      const imagePayloads = imageFiles.map(img => ({ mimeType: img.file.type, data: img.base64 }));
-      const result = await analyzeContent(userInput, imagePayloads);
+      // Sanitize user input
+      const sanitizedInput = sanitizeUserInput(userInput);
+
+      logger.info('Starting analysis', {
+        textLength: sanitizedInput.length,
+        imageCount: imageFiles.length
+      });
+
+      const imagePayloads = imageFiles.map(img => ({
+        mimeType: img.file.type,
+        data: img.base64
+      }));
+
+      const result = await analyzeContent(sanitizedInput, imagePayloads);
       setAnalysisResult(result);
+
+      logger.info('Analysis successful', {
+        taskCount: result.tasks.length
+      });
     } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : "An unknown error occurred.";
-      setError(`Analysis failed. Reason: ${errorMessage}. Please check your API key and try again.`);
+      const errorMessage = err instanceof Error ? err.message : ERROR_MESSAGES.GENERIC_ERROR;
+      setError(errorMessage);
+
+      logger.error('Analysis failed', err as Error);
     } finally {
       setIsLoading(false);
+      setIsSubmitting(false);
     }
   };
-  
+
   const handleReset = () => {
     setUserInput('');
     setImageFiles([]);
     setAnalysisResult(null);
     setError(null);
     setIsLoading(false);
+    logger.info('Reset application state');
   }
 
   const handleGoToLanding = () => {

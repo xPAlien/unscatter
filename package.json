@@ -13,12 +13,11 @@
     "format:check": "prettier --check \"**/*.{ts,tsx,json,css,md}\""
   },
   "dependencies": {
-    "react-dom": "^19.2.0",
-    "@google/genai": "^1.30.0",
-    "react": "^19.2.0"
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
   },
   "devDependencies": {
-    "@types/node": "^22.14.0",
+    "@types/node": "^22.19.1",
     "@typescript-eslint/eslint-plugin": "^8.18.1",
     "@typescript-eslint/parser": "^8.18.1",
     "@vitejs/plugin-react": "^5.0.0",
