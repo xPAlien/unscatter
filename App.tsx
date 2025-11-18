@@ -18,7 +18,7 @@ export interface ImageFile {
 
 const App: React.FC = () => {
   const [userInput, setUserInput] = useState<string>('');
-  const [imageFile, setImageFile] = useState<ImageFile | null>(null);
+  const [imageFiles, setImageFiles] = useState<ImageFile[]>([]);
   const [analysisResult, setAnalysisResult] = useState<AnalysisResult | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
@@ -47,8 +47,8 @@ const App: React.FC = () => {
   };
 
   const handleSubmit = async () => {
-    if (!userInput.trim() && !imageFile) {
-      setError("Input cannot be empty. Please provide text or an image.");
+    if (!userInput.trim() && imageFiles.length === 0) {
+      setError("Input cannot be empty. Please provide text or images.");
       return;
     }
     setIsLoading(true);
@@ -56,8 +56,8 @@ const App: React.FC = () => {
     setAnalysisResult(null);
 
     try {
-      const imagePayload = imageFile ? { mimeType: imageFile.file.type, data: imageFile.base64 } : null;
-      const result = await analyzeContent(userInput, imagePayload);
+      const imagePayloads = imageFiles.map(img => ({ mimeType: img.file.type, data: img.base64 }));
+      const result = await analyzeContent(userInput, imagePayloads);
       setAnalysisResult(result);
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : "An unknown error occurred.";
@@ -69,7 +69,7 @@ const App: React.FC = () => {
   
   const handleReset = () => {
     setUserInput('');
-    setImageFile(null);
+    setImageFiles([]);
     setAnalysisResult(null);
     setError(null);
     setIsLoading(false);
@@ -92,8 +92,8 @@ const App: React.FC = () => {
             <InputSection
               userInput={userInput}
               setUserInput={setUserInput}
-              imageFile={imageFile}
-              setImageFile={setImageFile}
+              imageFiles={imageFiles}
+              setImageFiles={setImageFiles}
               onSubmit={handleSubmit}
               isLoading={isLoading}
               setError={setError}
